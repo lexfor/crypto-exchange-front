@@ -1,0 +1,38 @@
+{
+  "name": "crypto-exchange-pr-scripts",
+  "version": "1.0.0",
+  "description": "GitHub Actions scripts for crypto exchange frontend",
+  "main": "pr_review_gemini.ts",
+  "private": true,
+  "scripts": {
+    "install": "npm install",
+    "build": "tsc",
+    "review": "ts-node pr_review_gemini.ts",
+    "review:compiled": "npm run build && node dist/pr_review_gemini.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "@octokit/rest": "^21.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/crypto-exchange-front"
+  },
+  "keywords": [
+    "github-actions",
+    "code-review",
+    "ai",
+    "gemini",
+    "pull-request"
+  ],
+  "author": "Your Team",
+  "license": "MIT"
+}

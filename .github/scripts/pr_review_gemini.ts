@@ -22,6 +22,12 @@ type ReviewResponse = {
     files?: FileReviewResponse[];
 }
 
+type GitHubFile = {
+    filename: string;
+    patch?: string;
+    [key: string]: any;
+}
+
 function tryParseJson(text: string): any | null {
     try {
         return JSON.parse(text);
@@ -54,7 +60,7 @@ async function run() {
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
     // Filter files with patches
-    const filesWithPatches = files.filter(file => file.patch);
+    const filesWithPatches = files.filter((file: GitHubFile) => file.patch);
     
     if (filesWithPatches.length === 0) {
         console.log("No files with patches to review.");
@@ -62,7 +68,7 @@ async function run() {
     }
 
     // Create a single prompt with all files
-    const filesContent = filesWithPatches.map(file => 
+    const filesContent = filesWithPatches.map((file: GitHubFile) => 
         `### ${file.filename}\n\`\`\`diff\n${file.patch}\n\`\`\``
     ).join('\n\n');
 
@@ -70,6 +76,8 @@ async function run() {
 You are an experienced code reviewer. Analyze all the diffs below and return STRICTLY JSON.
 Consider the context of all changes across all files to provide comprehensive feedback.
 Be concise and to the point. Also check for typos and errors.
+
+IMPORTANT: For inline comments, line numbers must refer to the lines in the MODIFIED file (new version), not the original file. Look at the diff context to determine the correct line numbers in the new file.
 
 Return format:
 {
@@ -112,7 +120,7 @@ ${filesContent}
         for (const fileReview of data.files) {
             if (!fileReview.filename) continue;
             
-            const file = filesWithPatches.find(f => f.filename === fileReview.filename);
+            const file = filesWithPatches.find((f: GitHubFile) => f.filename === fileReview.filename);
             if (!file) continue;
 
             let inline: InlineComment[] = [];
@@ -147,9 +155,11 @@ ${filesContent}
                     hasInlineComments = true;
                 } catch (err: any) {
                     console.error(
-                        `❌ Failed to leave inline comment for ${file.filename}#L${specifiedComment.line}:`,
-                        err?.response?.data || err.message
+                        `❌ Failed to leave inline comment for ${file.filename}#L${specifiedComment.line}:`
                     );
+                    console.error(`   Comment object:`, JSON.stringify(specifiedComment, null, 2));
+                    console.error(`   Error details:`, err?.response?.data || err.message);
+                    console.error(`   Full error:`, err);
                 }
             }
         }

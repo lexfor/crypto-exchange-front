@@ -21,22 +21,26 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Cache node_modules
+      - name: Cache scripts node_modules
         uses: actions/cache@v4
         with:
           path: |
-            **/node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+            .github/scripts/node_modules
+          key: ${{ runner.os }}-scripts-${{ hashFiles('.github/scripts/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-node-
+            ${{ runner.os }}-scripts-
 
-      - name: Install dependencies
-        run: npm install @google/generative-ai @octokit/rest typescript ts-node
+      - name: Install script dependencies
+        run: |
+          cd .github/scripts/
+          npm install
 
       - name: Run Gemini Review
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: npx ts-node .github/scripts/pr_review_gemini.ts
+        run: |
+          cd .github/scripts/
+          npm run review
