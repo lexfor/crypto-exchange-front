@@ -12,9 +12,14 @@ type InlineComment = {
     comment: string;
 }
 
-type ReviewResponse = {
+type FileReviewResponse = {
+    filename: string;
     inline?: InlineComment[];
     general?: string[];
+}
+
+type ReviewResponse = {
+    files?: FileReviewResponse[];
 }
 
 function tryParseJson(text: string): any | null {
@@ -48,103 +53,124 @@ async function run() {
     const generalPerFile: string[] = [];
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-    for (const file of files) {
-        if (!file.patch) continue;
+    // Filter files with patches
+    const filesWithPatches = files.filter(file => file.patch);
+    
+    if (filesWithPatches.length === 0) {
+        console.log("No files with patches to review.");
+        return;
+    }
 
-        const prompt = `
-Ты опытный code reviewer. Проанализируй diff и верни СТРОГО JSON.
-Учитывай контекст всех изменений. (не только этого файла, а всех измененых)
-Коротко и по делу. Также проверяй на опечатки и описки
-Формат:
+    // Create a single prompt with all files
+    const filesContent = filesWithPatches.map(file => 
+        `### ${file.filename}\n\`\`\`diff\n${file.patch}\n\`\`\``
+    ).join('\n\n');
+
+    const prompt = `
+You are an experienced code reviewer. Analyze all the diffs below and return STRICTLY JSON.
+Consider the context of all changes across all files to provide comprehensive feedback.
+Be concise and to the point. Also check for typos and errors.
+
+Return format:
 {
-  "inline": [ { "line": <number>, "comment": "<text>" }, ... ],
-  "general": [ "<text1>", "<text2>" ]
+  "files": [
+    {
+      "filename": "file1.js",
+      "inline": [ { "line": <number>, "comment": "<text>" }, ... ],
+      "general": [ "<text1>", "<text2>" ]
+    },
+    {
+      "filename": "file2.js", 
+      "inline": [ { "line": <number>, "comment": "<text>" }, ... ],
+      "general": [ "<text1>", "<text2>" ]
+    }
+  ]
 }
 
-Файл: ${file.filename}
-Изменения:
-\`\`\`diff
-${file.patch}
-\`\`\`
+Files to review:
+${filesContent}
     `.trim();
 
-        let rawText: string;
-        let data: ReviewResponse | any;
-        try {
-            const res = await model.generateContent(prompt);
-            rawText = res.response.text().trim();
-            data = tryParseJson(rawText);
-        } catch (e) {
-            generalPerFile.push(
-                `### ${file.filename}\nНе удалось получить структурированный ответ.\n\n<details><summary>Сырая выдача</summary>\n\n${String(e)}\n\n</details>`
-            );
-            continue;
-        }
+    let rawText: string;
+    let data: ReviewResponse | any;
+    try {
+        const res = await model.generateContent(prompt);
+        rawText = res.response.text().trim();
+        data = tryParseJson(rawText);
+    } catch (e) {
+        generalPerFile.push(
+            `### All Files\nFailed to get structured response.\n\n<details><summary>Raw output</summary>\n\n${String(e)}\n\n</details>`
+        );
+        console.log(
+            `✅ Done. Inline: no, General: ${generalPerFile.length ? "yes" : "no"}`
+        );
+        return;
+    }
 
-        let inline: InlineComment[] = [];
-        let general: string[] = [];
+    // Process the response
+    if (data && data.files && Array.isArray(data.files)) {
+        for (const fileReview of data.files) {
+            if (!fileReview.filename) continue;
+            
+            const file = filesWithPatches.find(f => f.filename === fileReview.filename);
+            if (!file) continue;
 
-        if (Array.isArray(data)) {
-            inline = data.filter(
-                (x: any) => x && typeof x.line === "number" && x.comment
-            );
-            general = data
-                .filter((x: any) => x && !x.line && x.comment)
-                .map((x: any) => x.comment);
-        } else if (data && typeof data === "object") {
-            if (Array.isArray(data.inline)) {
-                inline = data.inline.filter(
+            let inline: InlineComment[] = [];
+            let general: string[] = [];
+
+            if (Array.isArray(fileReview.inline)) {
+                inline = fileReview.inline.filter(
                     (x: any) => x && typeof x.line === "number" && x.comment
                 );
             }
-            if (Array.isArray(data.general)) {
-                general = data.general.filter((x: any) => typeof x === "string" && x.trim());
+            if (Array.isArray(fileReview.general)) {
+                general = fileReview.general.filter((x: any) => typeof x === "string" && x.trim());
             }
-        } else {
-            generalPerFile.push(`### ${file.filename}\n${rawText}`);
-            continue;
-        }
 
-        if (general.length) {
-            const bullets = general.map((t) => `- ${t}`).join("\n");
-            generalPerFile.push(`### ${file.filename}\n${bullets}`);
-        }
+            if (general.length) {
+                const bullets = general.map((t) => `- ${t}`).join("\n");
+                generalPerFile.push(`### ${file.filename}\n${bullets}`);
+            }
 
-        for (const specifiedComment of inline) {
-            try {
-                await octokit.pulls.createReviewComment({
-                    owner,
-                    repo,
-                    pull_number: prNumber,
-                    commit_id: headSha,
-                    path: file.filename,
-                    line: specifiedComment.line,
-                    side: "RIGHT",
-                    body: `🤖 Gemini: ${specifiedComment.comment}`,
-                });
-                hasInlineComments = true;
-            } catch (err: any) {
-                console.error(
-                    `❌ Не удалось оставить inline-комментарий для ${file.filename}#L${specifiedComment.line}:`,
-                    err?.response?.data || err.message
-                );
+            for (const specifiedComment of inline) {
+                try {
+                    await octokit.pulls.createReviewComment({
+                        owner,
+                        repo,
+                        pull_number: prNumber,
+                        commit_id: headSha,
+                        path: file.filename,
+                        line: specifiedComment.line,
+                        side: "RIGHT",
+                        body: `🤖 Gemini: ${specifiedComment.comment}`,
+                    });
+                    hasInlineComments = true;
+                } catch (err: any) {
+                    console.error(
+                        `❌ Failed to leave inline comment for ${file.filename}#L${specifiedComment.line}:`,
+                        err?.response?.data || err.message
+                    );
+                }
             }
         }
+    } else {
+        // Fallback: treat response as general comment for all files
+        generalPerFile.push(`### All Files\n${rawText}`);
     }
 
     if (generalPerFile.length) {
-        const body = `🤖 Gemini Review — общие замечания:\n\n${generalPerFile.join("\n\n")}`;
+        const body = `🤖 Gemini Review — general remarks:\n\n${generalPerFile.join("\n\n")}`;
         await octokit.issues.createComment({ owner, repo, issue_number: prNumber, body });
     }
 
     console.log(
-        `✅ Готово. Inline: ${hasInlineComments ? "да" : "нет"}, Общие: ${
-            generalPerFile.length ? "да" : "нет"
+        `✅ Done. Inline: ${hasInlineComments ? "yes" : "no"}, General: ${
+            generalPerFile.length ? "yes" : "no"
         }`
     );
 }
 
 run().catch((err) => {
-    console.error("❌ Ошибка выполнения:", err);
+    console.error("❌ Execution error:", err);
     process.exit(1);
 });
