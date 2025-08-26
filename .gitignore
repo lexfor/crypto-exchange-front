@@ -21,3 +21,10 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+/reviews
+
+# AI Review temporary files
+.cursor-ai-chat.json
+.cursor-ai-review.md
+reviews/CURSOR_AI_REVIEW_*.md
