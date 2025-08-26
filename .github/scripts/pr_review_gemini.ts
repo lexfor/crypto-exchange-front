@@ -1,8 +1,8 @@
 import { Octokit } from "@octokit/rest";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY as string || "");
+const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN as string});
 
 const [owner, repo] = (process.env.GITHUB_REPOSITORY || "").split("/");
 const prNumber = Number(process.env.PR_NUMBER);
@@ -33,7 +33,7 @@ function tryParseJson(text: string): any | null {
         return JSON.parse(text);
     } catch {
         const comment = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-        if (comment) {
+        if (comment && comment[1]) {
             try {
                 return JSON.parse(comment[1]);
             } catch {}
@@ -56,7 +56,7 @@ async function run() {
     const { data: files } = await octokit.pulls.listFiles({ owner, repo, pull_number: prNumber });
 
     let hasInlineComments = false;
-    const generalPerFile: string[] = [];
+    const fileGeneralComments: string[] = [];
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
     // Filter files with patches
@@ -106,11 +106,11 @@ ${filesContent}
         rawText = res.response.text().trim();
         data = tryParseJson(rawText);
     } catch (e) {
-        generalPerFile.push(
+        fileGeneralComments.push(
             `### All Files\nFailed to get structured response.\n\n<details><summary>Raw output</summary>\n\n${String(e)}\n\n</details>`
         );
         console.log(
-            `✅ Done. Inline: no, General: ${generalPerFile.length ? "yes" : "no"}`
+            `✅ Done. Inline: no, General: ${fileGeneralComments.length ? "yes" : "no"}`
         );
         return;
     }
@@ -120,7 +120,8 @@ ${filesContent}
         for (const fileReview of data.files) {
             if (!fileReview.filename) continue;
             
-            const file = filesWithPatches.find((f: GitHubFile) => f.filename === fileReview.filename);
+            const file = filesWithPatches.find((f: GitHubFile) =>
+                f.filename === fileReview.filename );
             if (!file) continue;
 
             let inline: InlineComment[] = [];
@@ -137,7 +138,7 @@ ${filesContent}
 
             if (general.length) {
                 const bullets = general.map((t) => `- ${t}`).join("\n");
-                generalPerFile.push(`### ${file.filename}\n${bullets}`);
+                fileGeneralComments.push(`### ${file.filename}\n${bullets}`);
             }
 
             for (const specifiedComment of inline) {
@@ -165,17 +166,17 @@ ${filesContent}
         }
     } else {
         // Fallback: treat response as general comment for all files
-        generalPerFile.push(`### All Files\n${rawText}`);
+        fileGeneralComments.push(`### All Files\n${rawText}`);
     }
 
-    if (generalPerFile.length) {
-        const body = `🤖 Gemini Review — general remarks:\n\n${generalPerFile.join("\n\n")}`;
+    if (fileGeneralComments.length) {
+        const body = `🤖 Gemini Review — general remarks:\n\n${fileGeneralComments.join("\n\n")}`;
         await octokit.issues.createComment({ owner, repo, issue_number: prNumber, body });
     }
 
     console.log(
         `✅ Done. Inline: ${hasInlineComments ? "yes" : "no"}, General: ${
-            generalPerFile.length ? "yes" : "no"
+            fileGeneralComments.length ? "yes" : "no"
         }`
     );
 }
