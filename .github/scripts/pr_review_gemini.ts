@@ -103,6 +103,40 @@ function getValidLineNumbers(diffLines: DiffLineInfo[]): number[] {
     return diffLines.map(line => line.newLineNumber);
 }
 
+function formatLineNumberRanges(lineNumbers: number[]): string {
+    if (lineNumbers.length === 0) return 'none';
+    
+    const sorted = [...lineNumbers].sort((a, b) => a - b);
+    const ranges: string[] = [];
+    let start = sorted[0];
+    let end = sorted[0];
+    
+    for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i] === end + 1) {
+            // Consecutive number, extend the range
+            end = sorted[i];
+        } else {
+            // Gap found, close current range and start new one
+            if (start === end) {
+                ranges.push(start.toString());
+            } else {
+                ranges.push(`${start}-${end}`);
+            }
+            start = sorted[i];
+            end = sorted[i];
+        }
+    }
+    
+    // Add the final range
+    if (start === end) {
+        ranges.push(start.toString());
+    } else {
+        ranges.push(`${start}-${end}`);
+    }
+    
+    return ranges.join(', ');
+}
+
 async function run() {
     if (!process.env.GEMINI_API_KEY) {
         throw new Error("❌ GEMINI_API_KEY is not set");
@@ -128,15 +162,16 @@ async function run() {
         return;
     }
 
-    // Create a single prompt with all files and valid line numbers
+    // Create a single prompt with all files and valid line number ranges
     const filesContentWithLineNumbers = filesWithPatches.map((file: GitHubFile) => {
         if (!file.patch) return `### ${file.filename}\nNo changes to review.`;
         
         const diffLines = parseDiffLines(file.patch);
         const validLines = getValidLineNumbers(diffLines);
+        const lineRanges = formatLineNumberRanges(validLines);
         
         return `### ${file.filename}
-Valid line numbers for comments: ${validLines.join(', ')}
+Valid line numbers for comments: ${lineRanges}
 \`\`\`diff
 ${file.patch}
 \`\`\``;
@@ -147,12 +182,12 @@ You are an experienced code reviewer. Analyze all the diffs below and return STR
 Consider the context of all changes across all files to provide comprehensive feedback.
 Be concise and to the point. Also check for typos and errors. Don't write positive comments only improvments.
 
-CRITICAL: For inline comments, you MUST ONLY use line numbers from the "Valid line numbers for comments" list provided for each file. 
-These numbers correspond to lines that actually exist in the modified file and can receive comments.
-DO NOT use any line numbers not in this list - they will cause errors.
+CRITICAL: For inline comments, you MUST ONLY use line numbers from the "Valid line numbers for comments" ranges provided for each file. 
+These ranges (e.g., "5-10, 15, 20-25") show which lines actually exist in the modified file and can receive comments.
+DO NOT use any line numbers outside these ranges - they will cause errors.
 
 If you want to comment on a specific change but the exact line isn't commentable, either:
-1. Use the nearest valid line number, or 
+1. Use the nearest valid line number within the provided ranges, or 
 2. Add it as a general comment instead
 
 Return format:
@@ -218,8 +253,9 @@ ${filesContentWithLineNumbers}
                     if (validateLineNumber(comment.line, diffLines)) {
                         inline.push(comment);
                     } else {
+                        const validRanges = formatLineNumberRanges(validLineNumbers);
                         console.warn(
-                            `⚠️ Invalid line number ${comment.line} for ${file.filename}. Valid lines: ${validLineNumbers.join(', ')}`
+                            `⚠️ Invalid line number ${comment.line} for ${file.filename}. Valid ranges: ${validRanges}`
                         );
                         invalidComments.push(comment);
                     }
@@ -262,7 +298,8 @@ ${filesContentWithLineNumbers}
                     );
                     console.error(`   Comment object:`, JSON.stringify(specifiedComment, null, 2));
                     console.error(`   Error details:`, err?.response?.data || err.message);
-                    console.error(`   Valid line numbers for this file:`, validLineNumbers);
+                    const validRanges = formatLineNumberRanges(validLineNumbers);
+                    console.error(`   Valid line ranges for this file: ${validRanges}`);
                     
                     // Fallback: convert failed inline comment to general comment
                     const fallbackComment = `Failed inline comment for line ${specifiedComment.line}: ${specifiedComment.comment}`;
