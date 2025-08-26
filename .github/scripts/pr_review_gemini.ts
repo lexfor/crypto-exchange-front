@@ -83,12 +83,12 @@ Return format:
 {
   "files": [
     {
-      "filename": "file1.js",
+      "filename": "file1.extension",
       "inline": [ { "line": <number>, "comment": "<text>" }, ... ],
       "general": [ "<text1>", "<text2>" ]
     },
     {
-      "filename": "file2.js", 
+      "filename": "file2.extension", 
       "inline": [ { "line": <number>, "comment": "<text>" }, ... ],
       "general": [ "<text1>", "<text2>" ]
     }
