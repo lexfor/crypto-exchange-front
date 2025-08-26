@@ -55,45 +55,136 @@ function getProjectContext() {
   return context;
 }
 
+function analyzeChanges(stagedFiles, diff) {
+  const analysis = {
+    codeQuality: [],
+    architecture: [],
+    security: [],
+    testing: [],
+    summary: '',
+    riskLevel: 'LOW'
+  };
+
+  const diffLines = diff.split('\n');
+  const addedLines = diffLines.filter(line => line.startsWith('+')).length;
+  const removedLines = diffLines.filter(line => line.startsWith('-')).length;
+  const hasTypeScriptFiles = stagedFiles.some(file => file.endsWith('.tsx') || file.endsWith('.ts'));
+  const hasComponentFiles = stagedFiles.some(file => file.includes('component') || file.endsWith('.tsx'));
+
+  // Analyze Code Quality
+  if (hasTypeScriptFiles) {
+    if (diff.includes(': JSX.Element') || diff.includes(': React.FC')) {
+      analysis.codeQuality.push('✅ Good TypeScript practices: explicit return types used');
+    }
+    if (diff.includes('const ') && !diff.includes('var ')) {
+      analysis.codeQuality.push('✅ Modern JavaScript: using const/let instead of var');
+    }
+    if (diff.includes('import') && diff.includes('from ')) {
+      analysis.codeQuality.push('✅ Proper ES6 imports used');
+    }
+  }
+
+  // Check for potential issues
+  if (diff.includes('any') && hasTypeScriptFiles) {
+    analysis.codeQuality.push('⚠️ TypeScript: "any" type found - consider more specific typing');
+    analysis.riskLevel = 'MEDIUM';
+  }
+  if (diff.includes('console.log') || diff.includes('console.error')) {
+    if (stagedFiles.some(file => file.includes('script') || file.includes('build'))) {
+      analysis.codeQuality.push('ℹ️ Console statements found - acceptable for build scripts');
+    } else {
+      analysis.codeQuality.push('⚠️ Console statements found - consider removing or using proper logging');
+    }
+  }
+
+  // Architecture Analysis
+  if (hasComponentFiles) {
+    if (diff.includes('function ') && diff.includes('return')) {
+      analysis.architecture.push('✅ Functional component pattern used');
+    }
+    if (diff.includes('useState') || diff.includes('useEffect')) {
+      analysis.architecture.push('ℹ️ React hooks detected - ensure proper dependency arrays');
+    }
+  }
+
+  // Security Analysis (skip for build/script files)
+  const isBuildScript = stagedFiles.some(file => 
+    file.includes('script') || file.includes('build') || file.includes('config')
+  );
+  
+  if (!isBuildScript) {
+    if (diff.includes('href=') && !diff.includes('rel="noopener noreferrer"')) {
+      analysis.security.push('⚠️ External links without security attributes detected');
+      analysis.riskLevel = 'MEDIUM';
+    }
+    if (diff.includes('dangerouslySetInnerHTML')) {
+      analysis.security.push('🚨 Potentially dangerous HTML injection found');
+      analysis.riskLevel = 'HIGH';
+    }
+    if (diff.includes('eval(') || diff.includes('Function(')) {
+      analysis.security.push('🚨 Dynamic code execution detected - security risk');
+      analysis.riskLevel = 'HIGH';
+    }
+  } else {
+    analysis.security.push('ℹ️ Build/script file - security checks skipped');
+  }
+
+  // Testing & Maintainability
+  const changeSize = addedLines + removedLines;
+  if (changeSize > 50) {
+    analysis.testing.push('⚠️ Large change detected - consider breaking into smaller commits');
+    analysis.riskLevel = analysis.riskLevel === 'LOW' ? 'MEDIUM' : analysis.riskLevel;
+  }
+  if (stagedFiles.some(file => file.includes('test') || file.includes('spec'))) {
+    analysis.testing.push('✅ Test files included in changes');
+  } else if (hasComponentFiles) {
+    analysis.testing.push('ℹ️ No test files found - consider adding tests for new functionality');
+  }
+
+  // Generate summary
+  const fileTypes = [...new Set(stagedFiles.map(file => {
+    if (file.endsWith('.tsx')) return 'React Components';
+    if (file.endsWith('.ts')) return 'TypeScript';
+    if (file.endsWith('.js')) return 'JavaScript';
+    if (file.endsWith('.css')) return 'Styles';
+    if (file.endsWith('.json')) return 'Config';
+    return 'Other';
+  }))];
+
+  analysis.summary = `${fileTypes.join(', ')} changes with ${addedLines} additions and ${removedLines} deletions. Risk level: ${analysis.riskLevel}.`;
+
+  return analysis;
+}
+
 function generateReviewPrompt(stagedFiles, diff, context) {
   const timestamp = new Date().toISOString();
+  const analysis = analyzeChanges(stagedFiles, diff);
   
   return `# 🤖 AI Code Review Request
 **Generated at:** ${timestamp}
 **Project:** ${context.projectName}
+**Risk Level:** ${analysis.riskLevel === 'HIGH' ? '🚨 HIGH' : analysis.riskLevel === 'MEDIUM' ? '⚠️ MEDIUM' : '✅ LOW'}
 
 ## 📋 Summary
 ${context.description}
+**Change Analysis:** ${analysis.summary}
 
 ## 📁 Files Changed (${stagedFiles.length})
 ${stagedFiles.map(file => `- ${file}`).join('\n')}
 
-## 🎯 Review Focus Areas
-Please review the following aspects:
+## 🎯 Automated Review Analysis
 
-### 🔍 Code Quality
-- [ ] Code follows TypeScript/React best practices
-- [ ] Functions are well-structured and readable
-- [ ] Variable naming is descriptive and consistent
-- [ ] Error handling is appropriate
+### 🔍 Code Quality Assessment
+${analysis.codeQuality.length > 0 ? analysis.codeQuality.map(item => `${item}`).join('\n') : 'ℹ️ No specific code quality issues detected'}
 
 ### 🏗️ Architecture & Design
-- [ ] Component structure follows React patterns
-- [ ] State management is appropriate
-- [ ] Dependencies are properly managed
-- [ ] Code follows SOLID principles
+${analysis.architecture.length > 0 ? analysis.architecture.map(item => `${item}`).join('\n') : 'ℹ️ Standard architectural patterns used'}
 
 ### 🔒 Security & Performance
-- [ ] No security vulnerabilities
-- [ ] Performance considerations addressed
-- [ ] Memory leaks prevented
-- [ ] Proper data validation
+${analysis.security.length > 0 ? analysis.security.map(item => `${item}`).join('\n') : '✅ No obvious security concerns detected'}
 
 ### 🧪 Testing & Maintainability
-- [ ] Code is testable
-- [ ] Breaking changes are documented
-- [ ] Backward compatibility considered
-- [ ] Documentation needs updates
+${analysis.testing.length > 0 ? analysis.testing.map(item => `${item}`).join('\n') : 'ℹ️ Standard maintainability practices followed'}
 
 ## 📝 Code Changes
 
