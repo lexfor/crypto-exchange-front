@@ -28,6 +28,12 @@ type GitHubFile = {
     [key: string]: any;
 }
 
+type DiffLineInfo = {
+    newLineNumber: number;
+    isAddedLine: boolean;
+    content: string;
+}
+
 function tryParseJson(text: string): any | null {
     try {
         return JSON.parse(text);
@@ -40,6 +46,95 @@ function tryParseJson(text: string): any | null {
         }
     }
     return null;
+}
+
+function parseDiffLines(patch: string): DiffLineInfo[] {
+    const lines = patch.split('\n');
+    const diffLines: DiffLineInfo[] = [];
+    let newLineNumber = 0;
+
+    for (const line of lines) {
+        // Parse diff header to get starting line number
+        if (line.startsWith('@@')) {
+            const match = line.match(/@@ -\d+,?\d* \+(\d+),?\d* @@/);
+            if (match) {
+                newLineNumber = parseInt(match[1], 10) - 1; // -1 because we'll increment before adding
+            }
+            continue;
+        }
+
+        // Skip file headers
+        if (line.startsWith('diff --git') || line.startsWith('index ') ||
+            line.startsWith('---') || line.startsWith('+++')) {
+            continue;
+        }
+
+        // Process content lines
+        if (line.startsWith('+')) {
+            // Added line
+            newLineNumber++;
+            diffLines.push({
+                newLineNumber,
+                isAddedLine: true,
+                content: line.substring(1)
+            });
+        } else if (line.startsWith('-')) {
+            // Deleted line - don't increment new line number
+            // These lines don't exist in the new file, so we can't comment on them
+        } else if (line.startsWith(' ')) {
+            // Context line
+            newLineNumber++;
+            diffLines.push({
+                newLineNumber,
+                isAddedLine: false,
+                content: line.substring(1)
+            });
+        }
+    }
+
+    return diffLines;
+}
+
+function validateLineNumber(lineNumber: number, diffLines: DiffLineInfo[]): boolean {
+    return diffLines.some(diffLine => diffLine.newLineNumber === lineNumber);
+}
+
+function getValidLineNumbers(diffLines: DiffLineInfo[]): number[] {
+    return diffLines.map(line => line.newLineNumber);
+}
+
+function formatLineNumberRanges(lineNumbers: number[]): string {
+    if (lineNumbers.length === 0) return 'none';
+    
+    const sorted = [...lineNumbers].sort((a, b) => a - b);
+    const ranges: string[] = [];
+    let start = sorted[0];
+    let end = sorted[0];
+    
+    for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i] === end + 1) {
+            // Consecutive number, extend the range
+            end = sorted[i];
+        } else {
+            // Gap found, close current range and start new one
+            if (start === end) {
+                ranges.push(start.toString());
+            } else {
+                ranges.push(`${start}-${end}`);
+            }
+            start = sorted[i];
+            end = sorted[i];
+        }
+    }
+    
+    // Add the final range
+    if (start === end) {
+        ranges.push(start.toString());
+    } else {
+        ranges.push(`${start}-${end}`);
+    }
+    
+    return ranges.join(', ');
 }
 
 async function run() {
@@ -67,36 +162,52 @@ async function run() {
         return;
     }
 
-    // Create a single prompt with all files
-    const filesContent = filesWithPatches.map((file: GitHubFile) => 
-        `### ${file.filename}\n\`\`\`diff\n${file.patch}\n\`\`\``
-    ).join('\n\n');
+    // Create a single prompt with all files and valid line number ranges
+    const filesContentWithLineNumbers = filesWithPatches.map((file: GitHubFile) => {
+        if (!file.patch) return `### ${file.filename}\nNo changes to review.`;
+        
+        const diffLines = parseDiffLines(file.patch);
+        const validLines = getValidLineNumbers(diffLines);
+        const lineRanges = formatLineNumberRanges(validLines);
+        
+        return `### ${file.filename}
+Valid line numbers for comments: ${lineRanges}
+\`\`\`diff
+${file.patch}
+\`\`\``;
+    }).join('\n\n');
 
     const prompt = `
 You are an experienced code reviewer. Analyze all the diffs below and return STRICTLY JSON.
 Consider the context of all changes across all files to provide comprehensive feedback.
-Be concise and to the point. Also check for typos and errors.
+Be concise and to the point. Also check for typos and errors. Don't write positive comments only improvements.
 
-IMPORTANT: For inline comments, line numbers must refer to the lines in the MODIFIED file (new version), not the original file. Look at the diff context to determine the correct line numbers in the new file.
+CRITICAL: For inline comments, you MUST ONLY use line numbers from the "Valid line numbers for comments" ranges provided for each file. 
+These ranges (e.g., "5-10, 15, 20-25") show which lines actually exist in the modified file and can receive comments.
+DO NOT use any line numbers outside these ranges - they will cause errors.
+
+If you want to comment on a specific change but the exact line isn't commentable, either:
+1. Use the nearest valid line number within the provided ranges, or 
+2. Add it as a general comment instead
 
 Return format:
 {
   "files": [
     {
       "filename": "file1.extension",
-      "inline": [ { "line": <number>, "comment": "<text>" }, ... ],
+      "inline": [ { "line": <valid_line_number>, "comment": "<text>" }, ... ],
       "general": [ "<text1>", "<text2>" ]
     },
     {
       "filename": "file2.extension", 
-      "inline": [ { "line": <number>, "comment": "<text>" }, ... ],
+      "inline": [ { "line": <valid_line_number>, "comment": "<text>" }, ... ],
       "general": [ "<text1>", "<text2>" ]
     }
   ]
 }
 
 Files to review:
-${filesContent}
+${filesContentWithLineNumbers}
     `.trim();
 
     let rawText: string;
@@ -122,18 +233,45 @@ ${filesContent}
             
             const file = filesWithPatches.find((f: GitHubFile) =>
                 f.filename === fileReview.filename );
-            if (!file) continue;
+            if (!file || !file.patch) continue;
+
+            // Parse diff to get valid line numbers for this file
+            const diffLines = parseDiffLines(file.patch);
+            const validLineNumbers = getValidLineNumbers(diffLines);
 
             let inline: InlineComment[] = [];
             let general: string[] = [];
+            const invalidComments: InlineComment[] = [];
 
             if (Array.isArray(fileReview.inline)) {
-                inline = fileReview.inline.filter(
+                const candidateInline = fileReview.inline.filter(
                     (x: any) => x && typeof x.line === "number" && x.comment
                 );
+
+                // Validate line numbers and separate valid from invalid
+                for (const comment of candidateInline) {
+                    if (validateLineNumber(comment.line, diffLines)) {
+                        inline.push(comment);
+                    } else {
+                        const validRanges = formatLineNumberRanges(validLineNumbers);
+                        console.warn(
+                            `⚠️ Invalid line number ${comment.line} for ${file.filename}. Valid ranges: ${validRanges}`
+                        );
+                        invalidComments.push(comment);
+                    }
+                }
             }
+
             if (Array.isArray(fileReview.general)) {
                 general = fileReview.general.filter((x: any) => typeof x === "string" && x.trim());
+            }
+
+            // Convert invalid inline comments to general comments
+            if (invalidComments.length > 0) {
+                const invalidCommentsText = invalidComments.map(
+                    (c) => `Line ${c.line}: ${c.comment}`
+                ).join('\n- ');
+                general.push(`Comments for invalid line numbers:\n- ${invalidCommentsText}`);
             }
 
             if (general.length) {
@@ -160,7 +298,12 @@ ${filesContent}
                     );
                     console.error(`   Comment object:`, JSON.stringify(specifiedComment, null, 2));
                     console.error(`   Error details:`, err?.response?.data || err.message);
-                    console.error(`   Full error:`, err);
+                    const validRanges = formatLineNumberRanges(validLineNumbers);
+                    console.error(`   Valid line ranges for this file: ${validRanges}`);
+                    
+                    // Fallback: convert failed inline comment to general comment
+                    const fallbackComment = `Failed inline comment for line ${specifiedComment.line}: ${specifiedComment.comment}`;
+                    fileGeneralComments.push(`### ${file.filename}\n- ${fallbackComment}`);
                 }
             }
         }
