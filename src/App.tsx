@@ -1,16 +1,16 @@
-import React from 'react';
+import React, { JSX } from 'react';
 import logo from './logo.svg';
 import './App.css';
 
 function App(): JSX.Element {
-  const appTitle = 'Crypto Exchange Platform';
+  const appTitle = 'Market Platform';
 
   return (
     <div className="App">
       <header className="App-header">
         <img src={logo} className="App-logo" alt="logo" />
         <h1>{appTitle}</h1>
-        <p>Welcome to our secure cryptocurrency exchange platform.</p>
+        <p>Welcome to our market platform.</p>
         <div className="nav-links">
           <a className="App-link" href="/markets" rel="noopener noreferrer">
             Markets

@@ -1,0 +1,10 @@
+# Husky pre-commit hook with AI review
+echo "🚀 Running pre-commit checks..."
+
+# Run lint-staged for code formatting and linting
+echo "🔧 Running ESLint and Prettier..."
+npx lint-staged
+
+# Run AI review script
+echo "🤖 Starting AI code review process..."
+npm run ai-review
