@@ -2,22 +2,26 @@ import React from 'react';
 import logo from './logo.svg';
 import './App.css';
 
-function App() {
+function App(): JSX.Element {
+  const appTitle = 'Crypto Exchange Platform';
+
   return (
     <div className="App">
       <header className="App-header">
         <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.tsx</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
+        <h1>{appTitle}</h1>
+        <p>Welcome to our secure cryptocurrency exchange platform.</p>
+        <div className="nav-links">
+          <a className="App-link" href="/markets" rel="noopener noreferrer">
+            Markets
+          </a>
+          <a className="App-link" href="/trade" rel="noopener noreferrer">
+            Trade
+          </a>
+          <a className="App-link" href="/wallet" rel="noopener noreferrer">
+            Wallet
+          </a>
+        </div>
       </header>
     </div>
   );
