@@ -1,3 +1,3 @@
-import { Id } from 'react-toastify';
+import { type Id } from 'react-toastify';
 
-export type ResponsePopUps = {[statusCode: number]: () => Id }
+export type ResponsePopUps = { [statusCode: number]: () => Id };
