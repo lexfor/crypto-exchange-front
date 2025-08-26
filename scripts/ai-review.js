@@ -34,8 +34,8 @@ function getProjectContext() {
   const readmePath = path.join(process.cwd(), 'README.md');
   
   let context = {
-    projectName: 'Unknown',
-    description: 'No description available',
+    projectName: '',
+    description: '',
     dependencies: {},
     scripts: {}
   };
@@ -55,136 +55,538 @@ function getProjectContext() {
   return context;
 }
 
-function analyzeChanges(stagedFiles, diff) {
+function analyzeFileChanges(filePath, fileDiff) {
   const analysis = {
+    filePath,
+    fileType: getFileType(filePath),
     codeQuality: [],
     architecture: [],
     security: [],
     testing: [],
-    summary: '',
-    riskLevel: 'LOW'
+    riskLevel: 'LOW',
+    addedLines: 0,
+    removedLines: 0,
+    summary: ''
   };
 
-  const diffLines = diff.split('\n');
-  const addedLines = diffLines.filter(line => line.startsWith('+')).length;
-  const removedLines = diffLines.filter(line => line.startsWith('-')).length;
-  const hasTypeScriptFiles = stagedFiles.some(file => file.endsWith('.tsx') || file.endsWith('.ts'));
-  const hasComponentFiles = stagedFiles.some(file => file.includes('component') || file.endsWith('.tsx'));
+  const diffLines = fileDiff.split('\n');
+  analysis.addedLines = diffLines.filter(line => line.startsWith('+')).length;
+  analysis.removedLines = diffLines.filter(line => line.startsWith('-')).length;
 
-  // Analyze Code Quality
-  if (hasTypeScriptFiles) {
-    if (diff.includes(': JSX.Element') || diff.includes(': React.FC')) {
-      analysis.codeQuality.push('✅ Good TypeScript practices: explicit return types used');
-    }
-    if (diff.includes('const ') && !diff.includes('var ')) {
-      analysis.codeQuality.push('✅ Modern JavaScript: using const/let instead of var');
-    }
-    if (diff.includes('import') && diff.includes('from ')) {
-      analysis.codeQuality.push('✅ Proper ES6 imports used');
-    }
-  }
+  // File type specific analysis
+  const isTypeScript = filePath.endsWith('.tsx') || filePath.endsWith('.ts');
+  const isReactComponent = filePath.endsWith('.tsx') || filePath.includes('component');
+  const isStyleFile = filePath.endsWith('.css') || filePath.endsWith('.scss') || filePath.endsWith('.less');
+  const isConfigFile = filePath.includes('config') || filePath.endsWith('.json') || filePath.includes('package.json');
+  const isBuildScript = filePath.includes('script') || filePath.includes('build') || filePath.includes('.husky');
 
-  // Check for potential issues
-  if (diff.includes('any') && hasTypeScriptFiles) {
-    analysis.codeQuality.push('⚠️ TypeScript: "any" type found - consider more specific typing');
-    analysis.riskLevel = 'MEDIUM';
-  }
-  if (diff.includes('console.log') || diff.includes('console.error')) {
-    if (stagedFiles.some(file => file.includes('script') || file.includes('build'))) {
-      analysis.codeQuality.push('ℹ️ Console statements found - acceptable for build scripts');
-    } else {
-      analysis.codeQuality.push('⚠️ Console statements found - consider removing or using proper logging');
+  // TypeScript/JavaScript Analysis
+  if (isTypeScript) {
+    if (fileDiff.includes(': JSX.Element') || fileDiff.includes(': React.FC')) {
+      analysis.codeQuality.push('✅ Explicit TypeScript return types used');
     }
-  }
-
-  // Architecture Analysis
-  if (hasComponentFiles) {
-    if (diff.includes('function ') && diff.includes('return')) {
-      analysis.architecture.push('✅ Functional component pattern used');
-    }
-    if (diff.includes('useState') || diff.includes('useEffect')) {
-      analysis.architecture.push('ℹ️ React hooks detected - ensure proper dependency arrays');
-    }
-  }
-
-  // Security Analysis (skip for build/script files)
-  const isBuildScript = stagedFiles.some(file => 
-    file.includes('script') || file.includes('build') || file.includes('config')
-  );
-  
-  if (!isBuildScript) {
-    if (diff.includes('href=') && !diff.includes('rel="noopener noreferrer"')) {
-      analysis.security.push('⚠️ External links without security attributes detected');
+    if (fileDiff.includes('any') && !isBuildScript) {
+      analysis.codeQuality.push('⚠️ "any" type detected - consider more specific typing');
       analysis.riskLevel = 'MEDIUM';
     }
-    if (diff.includes('dangerouslySetInnerHTML')) {
-      analysis.security.push('🚨 Potentially dangerous HTML injection found');
+    if (fileDiff.includes('interface ') || fileDiff.includes('type ')) {
+      analysis.codeQuality.push('✅ TypeScript interfaces/types defined');
+    }
+    if (fileDiff.includes('const ') && !fileDiff.includes('var ')) {
+      analysis.codeQuality.push('✅ Modern const/let usage instead of var');
+    }
+  }
+
+  // React Component Analysis
+  if (isReactComponent) {
+    if (fileDiff.includes('useState') || fileDiff.includes('useEffect')) {
+      analysis.architecture.push('ℹ️ React hooks detected - verify dependency arrays');
+    }
+    if (fileDiff.includes('function ') && fileDiff.includes('return')) {
+      analysis.architecture.push('✅ Functional component pattern used');
+    }
+    if (fileDiff.includes('className=')) {
+      analysis.architecture.push('✅ Proper React className usage');
+    }
+    if (fileDiff.includes('onClick') || fileDiff.includes('onChange')) {
+      analysis.architecture.push('ℹ️ Event handlers detected - ensure proper binding');
+    }
+  }
+
+  // Security Analysis
+  if (!isBuildScript && !isConfigFile) {
+    if (fileDiff.includes('href=') && !fileDiff.includes('rel="noopener noreferrer"')) {
+      analysis.security.push('⚠️ External links missing security attributes');
+      analysis.riskLevel = 'MEDIUM';
+    }
+    if (fileDiff.includes('dangerouslySetInnerHTML')) {
+      analysis.security.push('🚨 Dangerous HTML injection detected');
       analysis.riskLevel = 'HIGH';
     }
-    if (diff.includes('eval(') || diff.includes('Function(')) {
-      analysis.security.push('🚨 Dynamic code execution detected - security risk');
+    if (fileDiff.includes('eval(') || fileDiff.includes('Function(')) {
+      analysis.security.push('🚨 Dynamic code execution detected');
       analysis.riskLevel = 'HIGH';
     }
-  } else {
+    if (fileDiff.includes('localStorage') || fileDiff.includes('sessionStorage')) {
+      analysis.security.push('ℹ️ Browser storage usage - ensure data sanitization');
+    }
+  } else if (isBuildScript) {
     analysis.security.push('ℹ️ Build/script file - security checks skipped');
   }
 
-  // Testing & Maintainability
-  const changeSize = addedLines + removedLines;
-  if (changeSize > 50) {
-    analysis.testing.push('⚠️ Large change detected - consider breaking into smaller commits');
-    analysis.riskLevel = analysis.riskLevel === 'LOW' ? 'MEDIUM' : analysis.riskLevel;
-  }
-  if (stagedFiles.some(file => file.includes('test') || file.includes('spec'))) {
-    analysis.testing.push('✅ Test files included in changes');
-  } else if (hasComponentFiles) {
-    analysis.testing.push('ℹ️ No test files found - consider adding tests for new functionality');
+  // Style File Analysis
+  if (isStyleFile) {
+    if (fileDiff.includes('!important')) {
+      analysis.codeQuality.push('⚠️ !important usage detected - consider specificity');
+    }
+    if (fileDiff.includes('px') && fileDiff.includes('rem')) {
+      analysis.codeQuality.push('ℹ️ Mixed px/rem units - ensure consistency');
+    }
   }
 
-  // Generate summary
-  const fileTypes = [...new Set(stagedFiles.map(file => {
-    if (file.endsWith('.tsx')) return 'React Components';
-    if (file.endsWith('.ts')) return 'TypeScript';
-    if (file.endsWith('.js')) return 'JavaScript';
-    if (file.endsWith('.css')) return 'Styles';
-    if (file.endsWith('.json')) return 'Config';
-    return 'Other';
-  }))];
+  // Configuration File Analysis
+  if (isConfigFile) {
+    if (filePath.includes('package.json')) {
+      if (fileDiff.includes('"dependencies"') || fileDiff.includes('"devDependencies"')) {
+        analysis.testing.push('ℹ️ Package dependencies modified - verify compatibility');
+      }
+      if (fileDiff.includes('"scripts"')) {
+        analysis.testing.push('ℹ️ NPM scripts modified - test execution');
+      }
+    }
+  }
 
-  analysis.summary = `${fileTypes.join(', ')} changes with ${addedLines} additions and ${removedLines} deletions. Risk level: ${analysis.riskLevel}.`;
+  // Console statements
+  if (fileDiff.includes('console.log') || fileDiff.includes('console.error')) {
+    if (isBuildScript) {
+      analysis.codeQuality.push('ℹ️ Console statements in script file - acceptable');
+    } else {
+      analysis.codeQuality.push('⚠️ Console statements - consider proper logging');
+    }
+  }
+
+  // Testing considerations
+  const changeSize = analysis.addedLines + analysis.removedLines;
+  if (changeSize > 30 && !isBuildScript && !isConfigFile) {
+    analysis.testing.push('⚠️ Significant changes - consider adding tests');
+  }
+
+  if (isReactComponent && changeSize > 10) {
+    analysis.testing.push('ℹ️ Component changes - verify existing tests still pass');
+  }
+
+  // Generate file summary
+  analysis.summary = `${analysis.fileType}: +${analysis.addedLines}/-${analysis.removedLines} lines, Risk: ${analysis.riskLevel}`;
 
   return analysis;
 }
 
-function generateReviewPrompt(stagedFiles, diff, context) {
+async function performAutomatedAIReview(analysis, diff, stagedFiles) {
+  console.log('🤖 Performing automated AI code review...');
+  
+  const aiReview = {
+    approved: true,
+    score: 0,
+    feedback: [],
+    recommendations: [],
+    blockers: [],
+    decision: 'APPROVE'
+  };
+
+  // Advanced Code Quality Analysis
+  for (const fileAnalysis of analysis.fileAnalyses) {
+    console.log(`🔍 Analyzing ${fileAnalysis.filePath}...`);
+    
+    // High risk patterns that block commits
+    if (fileAnalysis.riskLevel === 'HIGH') {
+      aiReview.blockers.push(`❌ ${fileAnalysis.filePath}: High risk changes detected`);
+      aiReview.approved = false;
+      aiReview.score -= 30;
+    }
+    
+    // Security concerns
+    if (fileAnalysis.security.some(item => item.includes('🚨'))) {
+      aiReview.blockers.push(`🚨 ${fileAnalysis.filePath}: Security vulnerabilities found`);
+      aiReview.approved = false;
+      aiReview.score -= 50;
+    }
+    
+    // Performance and quality scoring
+    if (fileAnalysis.codeQuality.some(item => item.includes('✅'))) {
+      aiReview.score += 10;
+      aiReview.feedback.push(`✅ ${fileAnalysis.filePath}: Good coding practices detected`);
+    }
+    
+    if (fileAnalysis.architecture.some(item => item.includes('✅'))) {
+      aiReview.score += 10;
+      aiReview.feedback.push(`✅ ${fileAnalysis.filePath}: Good architectural patterns`);
+    }
+    
+    // Recommendations for improvements
+    if (fileAnalysis.codeQuality.some(item => item.includes('⚠️'))) {
+      aiReview.recommendations.push(`⚠️ ${fileAnalysis.filePath}: Consider addressing code quality warnings`);
+      aiReview.score -= 5;
+    }
+    
+    if (fileAnalysis.testing.some(item => item.includes('⚠️'))) {
+      aiReview.recommendations.push(`ℹ️ ${fileAnalysis.filePath}: Consider adding tests for significant changes`);
+    }
+  }
+
+  // Advanced pattern analysis with line numbers
+  const issuesWithLines = findIssuesWithLineNumbers(diff, stagedFiles);
+  
+  for (const issue of issuesWithLines) {
+    if (issue.severity === 'blocker') {
+      aiReview.blockers.push(`🚨 ${issue.file}:${issue.line} - ${issue.message}: \`${issue.code.trim()}\``);
+      aiReview.approved = false;
+      aiReview.score -= 100;
+    } else {
+      aiReview.recommendations.push(`⚠️ ${issue.file}:${issue.line} - ${issue.message}: \`${issue.code.trim()}\``);
+      aiReview.score -= 10;
+    }
+  }
+
+  // File-specific intelligent analysis with line numbers
+  for (const filePath of stagedFiles) {
+    const fileDiff = getFileDiff(diff, filePath);
+    
+    if (filePath.endsWith('.tsx') || filePath.endsWith('.ts')) {
+      // Analyze TypeScript/React patterns with line numbers
+      const tsIssues = analyzeTypeScriptPatterns(fileDiff, filePath);
+      tsIssues.forEach(issue => {
+        if (issue.severity === 'warning') {
+          aiReview.recommendations.push(`⚠️ ${issue.file}:${issue.line} - ${issue.message}: \`${issue.code.trim()}\``);
+          aiReview.score -= 5;
+        } else {
+          aiReview.feedback.push(`ℹ️ ${issue.file}:${issue.line} - ${issue.message}: \`${issue.code.trim()}\``);
+        }
+      });
+    }
+    
+    if (filePath.includes('package.json')) {
+      if (fileDiff.includes('"version"')) {
+        aiReview.feedback.push(`ℹ️ ${filePath}: Version bump detected - ensure changelog is updated`);
+      }
+    }
+  }
+
+  // Determine final decision
+  if (aiReview.score < -50 || aiReview.blockers.length > 0) {
+    aiReview.decision = 'REJECT';
+    aiReview.approved = false;
+  } else if (aiReview.score < 0 || aiReview.recommendations.length > 2) {
+    aiReview.decision = 'APPROVE_WITH_WARNINGS';
+  } else {
+    aiReview.decision = 'APPROVE';
+  }
+
+  return aiReview;
+}
+
+function findIssuesWithLineNumbers(diff, stagedFiles) {
+  const issues = [];
+  const suspiciousPatterns = [
+    { pattern: /TODO|FIXME|HACK/i, message: 'TODO/FIXME comment found', severity: 'warning' },
+    { pattern: /\.only\(|fdescribe|fit\(/i, message: 'Test isolation detected (only/fit)', severity: 'blocker' },
+    { pattern: /console\.(?!error)/i, message: 'Console statement in production code', severity: 'warning' },
+    { pattern: /debugger/i, message: 'Debugger statement found', severity: 'blocker' },
+    { pattern: /password.*=.*['"]/i, message: 'Hardcoded credentials detected', severity: 'blocker' },
+    { pattern: /api[_-]?key.*=.*['"]/i, message: 'Hardcoded API key detected', severity: 'blocker' },
+    { pattern: /eval\(/i, message: 'Dangerous eval() usage', severity: 'blocker' },
+    { pattern: /innerHTML\s*=/i, message: 'Potentially unsafe innerHTML usage', severity: 'warning' },
+    { pattern: /document\.write/i, message: 'Deprecated document.write usage', severity: 'warning' },
+    { pattern: /alert\(/i, message: 'Alert dialog found', severity: 'warning' },
+    { pattern: /confirm\(/i, message: 'Confirm dialog found', severity: 'warning' }
+  ];
+
+  for (const filePath of stagedFiles) {
+    const fileDiff = getFileDiff(diff, filePath);
+    const lines = fileDiff.split('\n');
+    let currentLineNumber = 0;
+    let inAddedSection = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // Track line numbers from diff headers
+      if (line.startsWith('@@')) {
+        const match = line.match(/@@ -\d+,?\d* \+(\d+),?\d* @@/);
+        if (match) {
+          currentLineNumber = parseInt(match[1], 10) - 1;
+        }
+        continue;
+      }
+      
+      // Skip file headers and metadata
+      if (line.startsWith('diff --git') || line.startsWith('index ') || 
+          line.startsWith('---') || line.startsWith('+++')) {
+        continue;
+      }
+      
+      // Track added lines (where issues matter most)
+      if (line.startsWith('+') && !line.startsWith('+++')) {
+        currentLineNumber++;
+        const codeContent = line.substring(1); // Remove the '+' prefix
+        
+        // Skip empty lines and build script patterns
+        if (codeContent.trim() === '' || filePath.includes('script') || filePath.includes('build')) {
+          continue;
+        }
+        
+        // Check for patterns in added lines
+        for (const { pattern, message, severity } of suspiciousPatterns) {
+          if (pattern.test(codeContent)) {
+            issues.push({
+              file: filePath,
+              line: currentLineNumber,
+              code: codeContent,
+              message,
+              severity,
+              pattern: pattern.source
+            });
+          }
+        }
+      } else if (line.startsWith(' ')) {
+        // Context line
+        currentLineNumber++;
+      } else if (line.startsWith('-')) {
+        // Deleted line - don't increment current line number
+        continue;
+      }
+    }
+  }
+
+  return issues;
+}
+
+function analyzeTypeScriptPatterns(fileDiff, filePath) {
+  const issues = [];
+  const lines = fileDiff.split('\n');
+  let currentLineNumber = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Track line numbers from diff headers
+    if (line.startsWith('@@')) {
+      const match = line.match(/@@ -\d+,?\d* \+(\d+),?\d* @@/);
+      if (match) {
+        currentLineNumber = parseInt(match[1], 10) - 1;
+      }
+      continue;
+    }
+    
+    // Skip file headers
+    if (line.startsWith('diff --git') || line.startsWith('index ') || 
+        line.startsWith('---') || line.startsWith('+++')) {
+      continue;
+    }
+    
+    // Analyze added lines
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      currentLineNumber++;
+      const codeContent = line.substring(1);
+      
+      // TypeScript/React specific patterns
+      if (codeContent.includes('useEffect') && !codeContent.includes('[]') && !codeContent.includes('[')) {
+        issues.push({
+          file: filePath,
+          line: currentLineNumber,
+          code: codeContent,
+          message: 'useEffect may need dependency array',
+          severity: 'info'
+        });
+      }
+      
+      if (codeContent.includes(': any') && !filePath.includes('script')) {
+        issues.push({
+          file: filePath,
+          line: currentLineNumber,
+          code: codeContent,
+          message: 'Consider replacing "any" with specific type',
+          severity: 'warning'
+        });
+      }
+      
+      if (codeContent.includes('setState') && codeContent.includes('this.state')) {
+        issues.push({
+          file: filePath,
+          line: currentLineNumber,
+          code: codeContent,
+          message: 'Consider using functional components with hooks',
+          severity: 'info'
+        });
+      }
+      
+      if (codeContent.includes('// @ts-ignore') || codeContent.includes('// @ts-nocheck')) {
+        issues.push({
+          file: filePath,
+          line: currentLineNumber,
+          code: codeContent,
+          message: 'TypeScript suppression comment - consider fixing the underlying issue',
+          severity: 'warning'
+        });
+      }
+      
+    } else if (line.startsWith(' ')) {
+      currentLineNumber++;
+    }
+  }
+
+  return issues;
+}
+
+function getFileDiff(fullDiff, filePath) {
+  const lines = fullDiff.split('\n');
+  const fileStart = lines.findIndex(line => line.includes(`diff --git a/${filePath}`));
+  if (fileStart === -1) return '';
+  
+  const nextFileStart = lines.findIndex((line, index) => 
+    index > fileStart && line.startsWith('diff --git')
+  );
+  
+  const fileEnd = nextFileStart === -1 ? lines.length : nextFileStart;
+  return lines.slice(fileStart, fileEnd).join('\n');
+}
+
+function getFileType(filePath) {
+  if (filePath.endsWith('.tsx')) return 'React Component';
+  if (filePath.endsWith('.ts')) return 'TypeScript';
+  if (filePath.endsWith('.js')) return 'JavaScript';
+  if (filePath.endsWith('.jsx')) return 'React (JS)';
+  if (filePath.endsWith('.css')) return 'CSS';
+  if (filePath.endsWith('.scss') || filePath.endsWith('.sass')) return 'SCSS/Sass';
+  if (filePath.endsWith('.json')) return 'JSON Config';
+  if (filePath.includes('package.json')) return 'Package Config';
+  if (filePath.includes('README')) return 'Documentation';
+  if (filePath.includes('test') || filePath.includes('spec')) return 'Test File';
+  if (filePath.includes('script')) return 'Build Script';
+  return 'Other';
+}
+
+function parseGitDiffByFile(diff) {
+  const fileChanges = {};
+  const lines = diff.split('\n');
+  let currentFile = null;
+  let currentFileDiff = [];
+
+  for (const line of lines) {
+    if (line.startsWith('diff --git')) {
+      // Save previous file if exists
+      if (currentFile && currentFileDiff.length > 0) {
+        fileChanges[currentFile] = currentFileDiff.join('\n');
+      }
+      
+      // Extract file path from "diff --git a/path b/path"
+      const match = line.match(/diff --git a\/(.+) b\/(.+)/);
+      currentFile = match ? match[2] : null;
+      currentFileDiff = [line];
+    } else if (currentFile) {
+      currentFileDiff.push(line);
+    }
+  }
+
+  // Don't forget the last file
+  if (currentFile && currentFileDiff.length > 0) {
+    fileChanges[currentFile] = currentFileDiff.join('\n');
+  }
+
+  return fileChanges;
+}
+
+function analyzeChanges(stagedFiles, diff) {
+  const fileChanges = parseGitDiffByFile(diff);
+  const fileAnalyses = [];
+  let overallRiskLevel = 'LOW';
+
+  // Analyze each file individually
+  for (const filePath of stagedFiles) {
+    const fileDiff = fileChanges[filePath] || '';
+    const fileAnalysis = analyzeFileChanges(filePath, fileDiff);
+    fileAnalyses.push(fileAnalysis);
+
+    // Update overall risk level
+    if (fileAnalysis.riskLevel === 'HIGH') {
+      overallRiskLevel = 'HIGH';
+    } else if (fileAnalysis.riskLevel === 'MEDIUM' && overallRiskLevel === 'LOW') {
+      overallRiskLevel = 'MEDIUM';
+    }
+  }
+
+  const totalAdded = fileAnalyses.reduce((sum, f) => sum + f.addedLines, 0);
+  const totalRemoved = fileAnalyses.reduce((sum, f) => sum + f.removedLines, 0);
+
+  // Generate overall summary
+  const fileTypes = [...new Set(fileAnalyses.map(f => f.fileType))];
+  const summary = `${fileTypes.join(', ')} changes with ${totalAdded} additions and ${totalRemoved} deletions. Overall risk: ${overallRiskLevel}.`;
+
+  return {
+    fileAnalyses,
+    overallRiskLevel,
+    totalAdded,
+    totalRemoved,
+    summary,
+    fileTypes
+  };
+}
+
+function generateReviewPrompt(stagedFiles, diff, context, analysis) {
   const timestamp = new Date().toISOString();
-  const analysis = analyzeChanges(stagedFiles, diff);
+  
+  // Generate per-file analysis section
+  const fileAnalysisSection = analysis.fileAnalyses.map(fileAnalysis => {
+    const riskIcon = fileAnalysis.riskLevel === 'HIGH' ? '🚨' : 
+                     fileAnalysis.riskLevel === 'MEDIUM' ? '⚠️' : '✅';
+    
+    return `
+### 📄 ${fileAnalysis.filePath}
+**Type:** ${fileAnalysis.fileType} | **Risk:** ${riskIcon} ${fileAnalysis.riskLevel} | **Changes:** +${fileAnalysis.addedLines}/-${fileAnalysis.removedLines}
+
+#### 🔍 Code Quality
+${fileAnalysis.codeQuality.length > 0 ? fileAnalysis.codeQuality.map(item => `- ${item}`).join('\n') : '- ℹ️ No specific issues detected'}
+
+#### 🏗️ Architecture
+${fileAnalysis.architecture.length > 0 ? fileAnalysis.architecture.map(item => `- ${item}`).join('\n') : '- ℹ️ Standard patterns used'}
+
+#### 🔒 Security
+${fileAnalysis.security.length > 0 ? fileAnalysis.security.map(item => `- ${item}`).join('\n') : '- ✅ No security concerns'}
+
+#### 🧪 Testing
+${fileAnalysis.testing.length > 0 ? fileAnalysis.testing.map(item => `- ${item}`).join('\n') : '- ℹ️ Standard practices followed'}`;
+  }).join('\n');
   
   return `# 🤖 AI Code Review Request
 **Generated at:** ${timestamp}
 **Project:** ${context.projectName}
-**Risk Level:** ${analysis.riskLevel === 'HIGH' ? '🚨 HIGH' : analysis.riskLevel === 'MEDIUM' ? '⚠️ MEDIUM' : '✅ LOW'}
+**Overall Risk Level:** ${analysis.overallRiskLevel === 'HIGH' ? '🚨 HIGH' : analysis.overallRiskLevel === 'MEDIUM' ? '⚠️ MEDIUM' : '✅ LOW'}
 
 ## 📋 Summary
-${context.description}
+${context.description || 'No description available'}
+
 **Change Analysis:** ${analysis.summary}
 
 ## 📁 Files Changed (${stagedFiles.length})
 ${stagedFiles.map(file => `- ${file}`).join('\n')}
 
-## 🎯 Automated Review Analysis
+## 🎯 Detailed File-by-File Analysis
+${fileAnalysisSection}
 
-### 🔍 Code Quality Assessment
-${analysis.codeQuality.length > 0 ? analysis.codeQuality.map(item => `${item}`).join('\n') : 'ℹ️ No specific code quality issues detected'}
+## 📊 Overall Assessment
 
-### 🏗️ Architecture & Design
-${analysis.architecture.length > 0 ? analysis.architecture.map(item => `${item}`).join('\n') : 'ℹ️ Standard architectural patterns used'}
+### Summary by Category
+- **Code Quality:** ${analysis.fileAnalyses.reduce((acc, f) => acc + f.codeQuality.length, 0)} items reviewed
+- **Architecture:** ${analysis.fileAnalyses.reduce((acc, f) => acc + f.architecture.length, 0)} items reviewed  
+- **Security:** ${analysis.fileAnalyses.reduce((acc, f) => acc + f.security.length, 0)} items reviewed
+- **Testing:** ${analysis.fileAnalyses.reduce((acc, f) => acc + f.testing.length, 0)} items reviewed
 
-### 🔒 Security & Performance
-${analysis.security.length > 0 ? analysis.security.map(item => `${item}`).join('\n') : '✅ No obvious security concerns detected'}
+### Risk Distribution
+${analysis.fileAnalyses.map(f => `- ${f.filePath}: ${f.riskLevel}`).join('\n')}
 
-### 🧪 Testing & Maintainability
-${analysis.testing.length > 0 ? analysis.testing.map(item => `${item}`).join('\n') : 'ℹ️ Standard maintainability practices followed'}
+### Change Volume
+- **Total Lines Added:** ${analysis.totalAdded}
+- **Total Lines Removed:** ${analysis.totalRemoved}
+- **File Types:** ${analysis.fileTypes.join(', ')}
 
 ## 📝 Code Changes
 
@@ -216,7 +618,7 @@ ${JSON.stringify(context.dependencies, null, 2)}
 `;
 }
 
-function main() {
+async function main() {
   console.log('🔍 Starting AI Code Review Process...\n');
 
   const stagedFiles = getStagedFiles();
@@ -232,8 +634,9 @@ function main() {
 
   const diff = getStagedDiff();
   const context = getProjectContext();
+  const analysis = analyzeChanges(stagedFiles, diff);
   
-  const reviewPrompt = generateReviewPrompt(stagedFiles, diff, context);
+  const reviewPrompt = generateReviewPrompt(stagedFiles, diff, context, analysis);
   
   // Create reviews directory if it doesn't exist
   const reviewsDir = path.join(process.cwd(), 'reviews');
@@ -253,37 +656,69 @@ function main() {
   console.log(reviewPrompt);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('');
-  console.log('🎯 Please copy the above prompt to your AI assistant for review.');
+  console.log('🎯 Performing automated AI review...');
   console.log('');
   
-  // Interactive prompt
-  console.log('⏸️  COMMIT PAUSED FOR REVIEW');
+  // Perform automated AI analysis
+  const aiReview = await performAutomatedAIReview(analysis, diff, stagedFiles);
+  
+  // Display AI review results
+  console.log('🤖 AI REVIEW RESULTS:');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  
+  console.log(`📊 Review Score: ${aiReview.score > 0 ? '✅' : aiReview.score < -20 ? '❌' : '⚠️'} ${aiReview.score}/100`);
+  console.log(`🎯 Decision: ${aiReview.decision === 'APPROVE' ? '✅ APPROVED' : 
+                               aiReview.decision === 'APPROVE_WITH_WARNINGS' ? '⚠️ APPROVED WITH WARNINGS' : 
+                               '❌ REJECTED'}`);
   console.log('');
   
-  const readline = require('readline');
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
+  // Show feedback
+  if (aiReview.feedback.length > 0) {
+    console.log('💬 AI Feedback:');
+    aiReview.feedback.forEach(item => console.log(`  ${item}`));
+    console.log('');
+  }
   
-  return new Promise((resolve) => {
-    rl.question('✅ Have you completed the AI review? Type "yes" to proceed, "no" to cancel: ', (answer) => {
-      const response = answer.toLowerCase().trim();
-      if (response === 'yes' || response === 'y') {
-        console.log('✅ Review completed. Proceeding with commit...');
-        rl.close();
-        resolve(0);
-      } else {
-        console.log('❌ Commit cancelled. Please address review feedback and try again.');
-        rl.close();
-        resolve(1);
-      }
-    });
-  }).then(exitCode => process.exit(exitCode));
+  // Show recommendations
+  if (aiReview.recommendations.length > 0) {
+    console.log('💡 Recommendations:');
+    aiReview.recommendations.forEach(item => console.log(`  ${item}`));
+    console.log('');
+  }
+  
+  // Show blockers
+  if (aiReview.blockers.length > 0) {
+    console.log('🚫 Blocking Issues:');
+    aiReview.blockers.forEach(item => console.log(`  ${item}`));
+    console.log('');
+  }
+  
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  
+  // Auto-proceed based on AI decision
+  if (aiReview.approved) {
+    if (aiReview.decision === 'APPROVE_WITH_WARNINGS') {
+      console.log('⚠️ AI APPROVED with warnings - proceeding with commit...');
+      console.log('💡 Consider addressing the recommendations in future commits.');
+    } else {
+      console.log('✅ AI APPROVED - proceeding with commit...');
+    }
+    console.log('');
+    process.exit(0);
+  } else {
+    console.log('❌ AI REJECTED the commit due to blocking issues.');
+    console.log('🔧 Please address the issues above and try committing again.');
+    console.log('');
+    process.exit(1);
+  }
 }
 
 if (require.main === module) {
-  main();
+  main().catch(error => {
+    console.error('❌ Error in AI review process:', error.message);
+    process.exit(1);
+  });
 }
 
 module.exports = { getStagedFiles, getStagedDiff, getProjectContext, generateReviewPrompt };
+
