@@ -145,7 +145,7 @@ ${file.patch}
     const prompt = `
 You are an experienced code reviewer. Analyze all the diffs below and return STRICTLY JSON.
 Consider the context of all changes across all files to provide comprehensive feedback.
-Be concise and to the point. Also check for typos and errors.
+Be concise and to the point. Also check for typos and errors. Don't write positive comments only improvments.
 
 CRITICAL: For inline comments, you MUST ONLY use line numbers from the "Valid line numbers for comments" list provided for each file. 
 These numbers correspond to lines that actually exist in the modified file and can receive comments.
