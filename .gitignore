@@ -28,3 +28,5 @@ yarn-error.log*
 .cursor-ai-chat.json
 .cursor-ai-review.md
 reviews/CURSOR_AI_REVIEW_*.md
+
+/.ai-context/index.json

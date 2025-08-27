@@ -7,4 +7,4 @@ npx lint-staged
 
 # Run AI review script
 echo "🤖 Starting AI code review process..."
-npm run ai-review
+npm run ai:review
