@@ -3,6 +3,7 @@ module.exports = {
 		browser: true,
 		es2021: true,
 		node: true,
+		jest: true,
 	},
 	extends: [
 		'eslint:recommended',
@@ -28,7 +29,8 @@ module.exports = {
 		'react/prop-types': 'off',
 		'react/react-in-jsx-scope': 'off',
 		'@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
-		'indent': ['error', 'tab'],
+		'indent': 'off',
+		'@typescript-eslint/indent': 'off',
 	},
 	settings: {
 		react: {

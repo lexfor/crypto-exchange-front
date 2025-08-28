@@ -1,6 +1,11 @@
-import { SignInForm } from '../sign-in';
+export interface SignUpForm {
+  email: string;
+  password: string;
+  username: string;
+  fullName: string;
+}
 
-export type SignUpForm = SignInForm & {
-    username: string;
-    fullName: string
+export interface SignUpResponse {
+  message: string;
+  status: number;
 }

@@ -1,38 +1,55 @@
-import AuthForm from '../../components/AuthForm';
-import { SignUpForm } from '../../types/auth/sign-up';
-import { AuthActivityType } from '../../types/auth';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import AuthForm from '../../components/AuthForm/AuthForm';
+import { AuthActivityType } from '../../types/auth';
 import { handleResponse } from './handlers/sign-up.response-handler';
-import { useEffect, useState } from 'react';
+import { SignUpForm } from '../../types/auth/sign-up';
+import { SignInForm } from '../../types/auth/sign-in';
+
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000';
 
 export default function SignUp() {
-	const navigate = useNavigate();
-	const [data, setData] = useState(new Response());
-	const [error, setError] = useState('');
+  const navigate = useNavigate();
+  const [error, setError] = useState<string>('');
+  const [isLoading, setIsLoading] = useState(false);
 
-	const handleSignUp = async ({ email, password, username, fullName }: SignUpForm) => {
-		const apiBaseUrl = process.env.REACT_APP_API_BASE_URL;
+  const handleSignUp = async (formData: SignInForm | SignUpForm) => {
+    setIsLoading(true);
+    setError('');
 
-		try {
-			const res = await fetch(`${apiBaseUrl}/auth/sign-up`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ email, password, username, fullName }),
-			});
-			if (!res.ok) {
-				throw new Error(`HTTP error! Status: ${res.status}`);
-			}
-			const data = await res.json();
-			setData(data);
-			await handleResponse(data, navigate);
-		} catch (err: any) {
-			setError(err.message);
-		}
-	};
+    try {
+      const signUpData = formData as SignUpForm;
+      const res = await fetch(`${API_URL}/auth/signup`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify(signUpData),
+      });
 
-	return (
-		<main>
-			<AuthForm type={AuthActivityType.SIGN_UP} onSubmit={handleSignUp} />
-		</main>
-	);
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || 'Registration failed');
+      }
+
+      await handleResponse(res, navigate);
+    } catch (err: any) {
+      console.error('SignUp error:', err);
+      setError(err.message || 'An unexpected error occurred');
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <main>
+      <AuthForm
+        type={AuthActivityType.SIGN_UP}
+        onSubmit={handleSignUp}
+        isLoading={isLoading}
+        error={error}
+      />
+    </main>
+  );
 }

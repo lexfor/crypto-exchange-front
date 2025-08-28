@@ -23,7 +23,7 @@ export const MESSAGES = {
 };
 
 // Math constants
-export const CONTEXT_SIZE_RATIO = 0.7;
+export const CONTEXT_SIZE_RATIO = 0.6;
 export const VECTOR_EPSILON = 1e-8;
 
 // Git commands

@@ -1,22 +1,52 @@
 import { toast } from 'react-toastify';
-import { ResponsePopUps } from '../../../types';
+import { SignUpResponse } from '../../../types/auth/sign-up';
 
-const responsePopUps: ResponsePopUps = {
-  201: () => toast.success('User successfully created!'),
-  400: () => toast.error('Bad request. Please check your data.'),
-  403: () => toast.error('Forbidden.'),
-  500: () => toast.error('Server error. Try again later.'),
+type NavigateFunction = (path: string) => void;
+
+interface ResponseHandlers {
+  [key: number]: (message?: string) => void;
+}
+
+const responseHandlers: ResponseHandlers = {
+  201: (message?: string) =>
+    toast.success(
+      message || 'User successfully created! Redirecting to login...'
+    ),
+  400: (message?: string) =>
+    toast.error(message || 'Invalid data. Please check your input.'),
+  403: (message?: string) =>
+    toast.error(message || 'Access forbidden. Please try again.'),
+  409: (message?: string) => toast.error(message || 'User already exists.'),
+  500: (message?: string) =>
+    toast.error(message || 'Server error. Please try again later.'),
 };
 
 export const handleResponse = async (
-  res: Response,
-  navigate?: (path: string) => void
-) => {
-  const popUp = responsePopUps[res.status];
-  if (popUp) popUp();
-  else toast.error(`Unexpected error: ${res.status}`);
+  response: Response,
+  navigate?: NavigateFunction
+): Promise<void> => {
+  let errorData: Partial<SignUpResponse> = {};
 
-  if (res.ok && navigate) {
-    setTimeout(() => navigate('/sign-in'), 1000);
+  try {
+    if (!response.ok) {
+      errorData = await response.json();
+    }
+  } catch (e) {
+    console.error('Error parsing response:', e);
+  }
+
+  const handler = responseHandlers[response.status];
+
+  if (handler) {
+    handler(errorData.message);
+  } else {
+    toast.error(errorData.message || `Unexpected error: ${response.status}`);
+  }
+
+  if (response.ok && navigate) {
+    setTimeout(() => {
+      toast.success('Redirecting to login page...');
+      navigate('/sign-in');
+    }, 1500);
   }
 };
