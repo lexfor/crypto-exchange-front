@@ -5,21 +5,37 @@ import ollama from "ollama";
 import crypto from "crypto";
 import {Chunk, Config, IndexFile} from "./types/index.js";
 
-const ROOT = process.cwd();
-const INDEX_DIR = path.join(ROOT, ".ai-context");
+const ROOT_DIR = process.cwd();
+const INDEX_DIR = path.join(ROOT_DIR, ".ai-context");
 const INDEX_PATH = path.join(INDEX_DIR, "index.json");
 const CONFIG_PATH = path.join(INDEX_DIR, "config.json");
 
+/**
+ * Loads indexing configuration from JSON file
+ * @returns {Config} Configuration object with indexing settings
+ */
 function loadConfig(): Config {
     return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
 }
 
-function sha1(s: string) {
-    return crypto.createHash("sha1").update(s).digest("hex");
+/**
+ * Creates a SHA-1 hash from a string
+ * @param {string} input - Input string to hash
+ * @returns {string} SHA-1 hash as hex string
+ */
+function sha1(input: string) {
+    return crypto.createHash("sha1").update(input).digest("hex");
 }
 
-function splitToChunks(text: string, maxChars: number, overlap: number): { text: string; startLine: number; endLine: number }[] {
-    const lines = text.split(/\r?\n/);
+/**
+ * Splits text into overlapping chunks considering maximum size
+ * @param {string} sourceText - Source text to split
+ * @param {number} maxChars - Maximum characters per chunk
+ * @param {number} overlap - Number of characters to overlap between chunks
+ * @returns {Array<{text: string, startLine: number, endLine: number}>} Array of chunks with their positions
+ */
+function splitToChunks(sourceText: string, maxChars: number, overlap: number): { text: string; startLine: number; endLine: number }[] {
+    const lines = sourceText.split(/\r?\n/);
     const chunks: { text: string; startLine: number; endLine: number }[] = [];
 
     let i = 0;
@@ -50,11 +66,20 @@ function splitToChunks(text: string, maxChars: number, overlap: number): { text:
     return chunks;
 }
 
-async function embedText(model: string, text: string): Promise<number[]> {
-    const res = await ollama.embeddings({ model, prompt: text });
+/**
+ * Gets embeddings for text using the model
+ * @param {string} modelName - Model name for creating embeddings
+ * @param {string} text - Text to embed
+ * @returns {Promise<number[]>} Embedding vector
+ */
+async function embedText(modelName: string, text: string): Promise<number[]> {
+    const res = await ollama.embeddings({ model: modelName, prompt: text });
     return res.embedding;
 }
 
+/**
+ * Main function that creates the index for RAG system
+ */
 async function main() {
     if (!fs.existsSync(INDEX_DIR)) {
         fs.mkdirSync(INDEX_DIR, { recursive: true })
@@ -71,7 +96,7 @@ async function main() {
     let dim = -1;
 
     for (const file of files) {
-        const filePath = path.join(ROOT, file);
+        const filePath = path.join(ROOT_DIR, file);
         if (!fs.existsSync(filePath) || fs.lstatSync(filePath).isDirectory()) {
             continue;
         }

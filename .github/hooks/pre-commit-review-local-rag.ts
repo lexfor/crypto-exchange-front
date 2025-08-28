@@ -7,16 +7,26 @@ import {ReviewConfig} from "../../.ai-context/types/index.js";
 
 const CONFIG_PATH = path.join(process.cwd(), ".ai-context", "config.json");
 
+/**
+ * Loads configuration for AI reviewer from JSON file
+ * @returns {ReviewConfig} Configuration object with model settings and check parameters
+ */
 function loadConfig(): ReviewConfig {
-    const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+    const configData = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
     return {
-        llmModel: raw.llmModel,
-        blockOnSeverities: raw.blockOnSeverities,
-        maxPromptChars: raw.maxPromptChars
+        llmModel: configData.llmModel,
+        blockOnSeverities: configData.blockOnSeverities,
+        maxPromptChars: configData.maxPromptChars
     };
 }
 
-function strictPrompt(context: string, diff: string) {
+/**
+ * Creates a prompt for AI reviewer with project context and changes
+ * @param {string} projectContext - Project context from index
+ * @param {string} codeChanges - Git diff changes
+ * @returns {string} Formatted prompt for the model
+ */
+function createReviewPrompt(projectContext: string, codeChanges: string): string {
     return `
 You are a strict code reviewer. Use the provided CONTEXT (read-only) to understand the project.
 Review ONLY the DIFF and produce ONLY valid JSON. No text outside JSON. No markdown. No comments.
@@ -38,86 +48,107 @@ Guidelines:
 - In quotes provide which exactly code you refer to.
 
 CONTEXT:
-${context}
+${projectContext}
 
 DIFF:
-${diff}
+${codeChanges}
 
 Return JSON now:
 `.trim();
 }
 
-function extractJSON(input: string): any | null {
-    const match = input.match(/\{[\s\S]*\}$/m);
-    if (!match) return null;
-    try { return JSON.parse(match[0]); } catch { return null; }
+/**
+ * Extracts JSON from model response
+ * @param {string} modelResponse - Response from LLM model
+ * @returns {object|null} Parsed JSON or null if error
+ */
+function extractJSON(modelResponse: string): any | null {
+    const jsonMatch = modelResponse.match(/\{[\s\S]*\}$/m);
+    if (!jsonMatch) return null;
+    try { return JSON.parse(jsonMatch[0]); } catch { return null; }
 }
 
-async function callLLM(model: string, prompt: string, retries = 2): Promise<any | null> {
-    for (let i = 0; i <= retries; i++) {
-        const res = await ollama.generate({ model, prompt });
-        const txt = res.response.trim();
-        const parsed = extractJSON(txt);
-        if (parsed) return parsed;
+/**
+ * Makes a request to LLM model with retry capability
+ * @param {string} modelName - Model name to use
+ * @param {string} prompt - Prompt for the model
+ * @param {number} retries - Number of retry attempts
+ * @returns {Promise<object|null>} Result in JSON format or null
+ */
+async function callLLM(modelName: string, prompt: string, retries: number = 2): Promise<any | null> {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        const response = await ollama.generate({ model: modelName, prompt });
+        const responseText = response.response.trim();
+        const parsedResponse = extractJSON(responseText);
+        if (parsedResponse) return parsedResponse;
     }
     return null;
 }
 
-function formatContexts(chunks: {file: string; startLine: number; endLine: number; text: string;}[], maxChars: number) {
-    let out = "";
-    for (const ch of chunks) {
-        const header = `FILE: ${ch.file} [${ch.startLine}-${ch.endLine}]`;
-        const body = ch.text;
-        const block = `${header}\n${body}\n---\n`;
-        if (out.length + block.length > maxChars) break;
-        out += block;
+/**
+ * Formats found contexts into a single text with size limit
+ * @param {Array<{file: string, startLine: number, endLine: number, text: string}>} contextChunks - Context chunks
+ * @param {number} maxChars - Maximum number of characters
+ * @returns {string} Formatted context text
+ */
+function formatContexts(contextChunks: {file: string; startLine: number; endLine: number; text: string;}[], maxChars: number): string {
+    let formattedContext = "";
+    for (const chunk of contextChunks) {
+        const chunkHeader = `FILE: ${chunk.file} [${chunk.startLine}-${chunk.endLine}]`;
+        const chunkContent = chunk.text;
+        const chunkBlock = `${chunkHeader}\n${chunkContent}\n---\n`;
+        if (formattedContext.length + chunkBlock.length > maxChars) break;
+        formattedContext += chunkBlock;
     }
-    return out;
+    return formattedContext;
 }
 
+/**
+ * Main function that performs AI review of changes
+ */
 async function main() {
-    const config = loadConfig();
+    const reviewConfig = loadConfig();
 
-    const diffRaw = execSync("git diff --cached", { encoding: "utf-8" });
-    if (!diffRaw) {
+    const stagedChanges = execSync("git diff --cached", { encoding: "utf-8" });
+    if (!stagedChanges) {
         console.log("✅ No staged changes.");
         process.exit(0);
     }
 
-    const contexts = await retrieveForDiff(diffRaw);
-    const contextText = formatContexts(contexts, Math.floor(config.maxPromptChars * 0.7));
+    const relevantContexts = await retrieveForDiff(stagedChanges);
+    const formattedContext = formatContexts(relevantContexts, Math.floor(reviewConfig.maxPromptChars * 0.7));
 
-    if (!contextText) {
+    if (!formattedContext) {
         console.warn("⚠️ No RAG context found. Did you build the index? (npm run ai:index)");
     }
 
-    const diffText = diffRaw.slice(0, Math.floor(config.maxPromptChars));
+    const truncatedDiff = stagedChanges.slice(0, Math.floor(reviewConfig.maxPromptChars));
 
-    const prompt = strictPrompt(contextText, diffText);
-    const json = await callLLM(config.llmModel, prompt, 2);
+    const reviewPrompt = createReviewPrompt(formattedContext, truncatedDiff);
+    const reviewResult = await callLLM(reviewConfig.llmModel, reviewPrompt, 2);
 
-    if (!json) {
+    if (!reviewResult) {
         console.error("❌ Local model did not return valid JSON. Aborting commit.");
         process.exit(1);
     }
 
-    const inline = Array.isArray(json.inlineComments) ? json.inlineComments : [];
-    const general = Array.isArray(json.generalComments) ? json.generalComments : [];
+    const inlineComments = Array.isArray(reviewResult.inlineComments) ? reviewResult.inlineComments : [];
+    const generalComments = Array.isArray(reviewResult.generalComments) ? reviewResult.generalComments : [];
 
-    if (general.length) {
+    if (generalComments.length) {
         console.log("\n📋 General comments:");
-        for (const g of general) console.log(` - ${g}`);
+        for (const comment of generalComments) console.log(` - ${comment}`);
     }
 
-    if (inline.length) {
+    if (inlineComments.length) {
         console.log("\n📌 Inline comments:");
-        for (const r of inline) {
-            console.log(` - ${r.file}:${r.line} [${r.severity}] → ${r.comment} (${r.code})`);
+        for (const comment of inlineComments) {
+            console.log(` - ${comment.file}:${comment.line} [${comment.severity}] → ${comment.comment} (${comment.code})`);
         }
     }
 
-    const hasBlocker = inline.some((r: any) => config.blockOnSeverities.includes(r.severity));
-    if (hasBlocker) {
+    const hasBlockingIssues = inlineComments.some((comment: any) => reviewConfig.blockOnSeverities.includes(comment.severity));
+    if (hasBlockingIssues) {
         console.log("\n⛔ Blockers found. Commit aborted.");
         process.exit(1);
     }
@@ -126,7 +157,7 @@ async function main() {
     process.exit(0);
 }
 
-main().catch((e) => {
-    console.error("Unexpected error:", e);
+main().catch((error) => {
+    console.error("Unexpected error:", error);
     process.exit(1);
 });
