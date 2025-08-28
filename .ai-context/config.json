@@ -1,0 +1,28 @@
+{
+  "llmModel": "qwen2.5-coder:14b",
+  "embedModel": "nomic-embed-text:v1.5",
+  "ignoreGlobs": [
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**",
+    "**/coverage/**",
+    "**/*.lock",
+    "**/*.min.*",
+    "**/*.map",
+    "**/.ai-context/**",
+    "**/.github/**"
+  ],
+  "includeGlobs": [
+    "src/**/*.*",
+    "README.md",
+    "package.json"
+  ],
+  "chunkMaxChars": 2000,
+  "chunkOverlapChars": 200,
+  "topK": 8,
+  "maxContextChunksPerFile": 3,
+  "blockOnSeverities": ["blocker"],
+  "maxPromptChars": 25000
+}
