@@ -1,9 +1,12 @@
 import AuthForm from '../../components/AuthForm/AuthForm';
 import { AuthActivityType } from '../../types/auth';
 import { SignInForm } from '../../types/auth/sign-in';
+import { useNavigate } from 'react-router-dom';
+import { handleResponse } from './handlers/sign-in.response-handler';
 
 export default function SignIn() {
   const apiBaseUrl = process.env.REACT_APP_API_BASE_URL;
+  const navigate = useNavigate();
 
   const handleSignIn = async ({ email, password }: SignInForm) => {
     const res = await fetch(`${apiBaseUrl}/auth/sign-in`, {
@@ -12,8 +15,7 @@ export default function SignIn() {
       body: JSON.stringify({ email, password }),
     });
 
-    const data = await res.json();
-    console.log(data);
+    await handleResponse(res, navigate);
   };
 
   return (
