@@ -3,19 +3,48 @@ import path from "path";
 import fg from "fast-glob";
 import ollama from "ollama";
 import crypto from "crypto";
-import {Chunk, Config, IndexFile} from "./types/index.js";
+import { Chunk, Config, IndexFile } from "./types/index.js";
+import {
+    AI_CONTEXT_DIR,
+    CONFIG_FILENAME,
+    INDEX_FILENAME,
+    FILE_ENCODING,
+    JSON_INDENT,
+    LINE_SPLIT_PATTERN,
+    INDEX_VERSION,
+    MESSAGES
+} from "./constants.js";
 
 const ROOT_DIR = process.cwd();
-const INDEX_DIR = path.join(ROOT_DIR, ".ai-context");
-const INDEX_PATH = path.join(INDEX_DIR, "index.json");
-const CONFIG_PATH = path.join(INDEX_DIR, "config.json");
+const INDEX_DIR = path.join(ROOT_DIR, AI_CONTEXT_DIR);
+const INDEX_PATH = path.join(INDEX_DIR, INDEX_FILENAME);
+const CONFIG_PATH = path.join(INDEX_DIR, CONFIG_FILENAME);
+
+/**
+ * Custom error class for indexing related errors
+ */
+class IndexingError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'IndexingError';
+    }
+}
 
 /**
  * Loads indexing configuration from JSON file
  * @returns {Config} Configuration object with indexing settings
+ * @throws {IndexingError} If config file is missing or invalid
  */
 function loadConfig(): Config {
-    return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+    try {
+        if (!fs.existsSync(CONFIG_PATH)) {
+            throw new IndexingError(`Configuration file not found at ${CONFIG_PATH}`);
+        }
+        return JSON.parse(fs.readFileSync(CONFIG_PATH, FILE_ENCODING));
+    } catch (error) {
+        if (error instanceof IndexingError) throw error;
+        throw new IndexingError(`Failed to parse configuration: ${error.message}`);
+    }
 }
 
 /**
@@ -23,7 +52,7 @@ function loadConfig(): Config {
  * @param {string} input - Input string to hash
  * @returns {string} SHA-1 hash as hex string
  */
-function sha1(input: string) {
+function sha1(input: string): string {
     return crypto.createHash("sha1").update(input).digest("hex");
 }
 
@@ -35,32 +64,32 @@ function sha1(input: string) {
  * @returns {Array<{text: string, startLine: number, endLine: number}>} Array of chunks with their positions
  */
 function splitToChunks(sourceText: string, maxChars: number, overlap: number): { text: string; startLine: number; endLine: number }[] {
-    const lines = sourceText.split(/\r?\n/);
+    const lines = sourceText.split(LINE_SPLIT_PATTERN);
     const chunks: { text: string; startLine: number; endLine: number }[] = [];
 
-    let i = 0;
-    while (i < lines.length) {
-        let cur: string[] = [];
-        let len = 0;
-        const startLine = i + 1;
+    let currentLine = 0;
+    while (currentLine < lines.length) {
+        let currentChunk: string[] = [];
+        let chunkLength = 0;
+        const startLine = currentLine + 1;
 
-        while (i < lines.length && len + lines[i].length < maxChars) {
-            cur.push(lines[i]);
-            len += lines[i].length + 1;
-            i++;
+        while (currentLine < lines.length && chunkLength + lines[currentLine].length < maxChars) {
+            currentChunk.push(lines[currentLine]);
+            chunkLength += lines[currentLine].length + 1;
+            currentLine++;
         }
-        let endLine = i;
+        let endLine = currentLine;
 
-        if (overlap > 0 && i < lines.length) {
-            const back = Math.floor(overlap / 80);
-            i = Math.max(i - back, 0);
+        if (overlap > 0 && currentLine < lines.length) {
+            const overlapLines = Math.floor(overlap / 80);
+            currentLine = Math.max(currentLine - overlapLines, 0);
         }
 
-        if (cur.length) {
-            chunks.push({ text: cur.join("\n"), startLine, endLine });
-        } else {
-            chunks.push({ text: lines[i], startLine, endLine: i + 1 });
-            i++;
+        if (currentChunk.length) {
+            chunks.push({ text: currentChunk.join("\n"), startLine, endLine });
+        } else if (currentLine < lines.length) {
+            chunks.push({ text: lines[currentLine], startLine: currentLine + 1, endLine: currentLine + 1 });
+            currentLine++;
         }
     }
     return chunks;
@@ -71,69 +100,94 @@ function splitToChunks(sourceText: string, maxChars: number, overlap: number): {
  * @param {string} modelName - Model name for creating embeddings
  * @param {string} text - Text to embed
  * @returns {Promise<number[]>} Embedding vector
+ * @throws {Error} If embedding generation fails
  */
 async function embedText(modelName: string, text: string): Promise<number[]> {
-    const res = await ollama.embeddings({ model: modelName, prompt: text });
-    return res.embedding;
+    try {
+        const response = await ollama.embeddings({ model: modelName, prompt: text });
+
+        if (!response || !Array.isArray(response.embedding)) {
+            throw new Error('Invalid embedding response from model');
+        }
+
+        return response.embedding;
+    } catch (error) {
+        throw new Error(`Failed to generate embeddings: ${error.message}`);
+    }
 }
 
 /**
  * Main function that creates the index for RAG system
  */
 async function main() {
-    if (!fs.existsSync(INDEX_DIR)) {
-        fs.mkdirSync(INDEX_DIR, { recursive: true })
-    }
-    const config = loadConfig();
-
-    const files = await fg(config.includeGlobs, { ignore: config.ignoreGlobs, dot: true });
-    if (!files.length) {
-        console.log("No files to index.");
-        process.exit(0);
-    }
-
-    const chunks: Chunk[] = [];
-    let dim = -1;
-
-    for (const file of files) {
-        const filePath = path.join(ROOT_DIR, file);
-        if (!fs.existsSync(filePath) || fs.lstatSync(filePath).isDirectory()) {
-            continue;
+    try {
+        if (!fs.existsSync(INDEX_DIR)) {
+            fs.mkdirSync(INDEX_DIR, { recursive: true });
         }
 
-        const raw = fs.readFileSync(filePath, "utf-8");
-        const fileChunks = splitToChunks(raw, config.chunkMaxChars, config.chunkOverlapChars);
+        const config = loadConfig();
+        const files = await fg(config.includeGlobs, { ignore: config.ignoreGlobs, dot: true });
 
-        for (const chunk of fileChunks) {
-            const id = sha1(`${file}:${chunk.startLine}-${chunk.endLine}:${sha1(chunk.text)}`);
-            const vector = await embedText(config.embedModel, chunk.text);
-            if (dim < 0) dim = vector.length;
-
-            chunks.push({
-                id,
-                file,
-                startLine: chunk.startLine,
-                endLine: chunk.endLine,
-                text: chunk.text,
-                hash: sha1(chunk.text),
-                vector
-            });
+        if (!files.length) {
+            console.log(MESSAGES.NO_FILES_TO_INDEX);
+            process.exit(0);
         }
+
+        const chunks: Chunk[] = [];
+        let embeddingDimension = -1;
+
+        for (const file of files) {
+            const filePath = path.join(ROOT_DIR, file);
+
+            try {
+                const stats = fs.lstatSync(filePath);
+                if (!stats.isFile()) continue;
+
+                const fileContent = fs.readFileSync(filePath, FILE_ENCODING);
+                const fileChunks = splitToChunks(fileContent, config.chunkMaxChars, config.chunkOverlapChars);
+
+                for (const chunk of fileChunks) {
+                    const chunkId = sha1(`${file}:${chunk.startLine}-${chunk.endLine}:${sha1(chunk.text)}`);
+                    const vector = await embedText(config.embedModel, chunk.text);
+
+                    if (embeddingDimension === -1) {
+                        embeddingDimension = vector.length;
+                    } else if (vector.length !== embeddingDimension) {
+                        throw new IndexingError(`Inconsistent embedding dimensions: ${vector.length} vs ${embeddingDimension}`);
+                    }
+
+                    chunks.push({
+                        id: chunkId,
+                        file,
+                        startLine: chunk.startLine,
+                        endLine: chunk.endLine,
+                        text: chunk.text,
+                        hash: sha1(chunk.text),
+                        vector
+                    });
+                }
+            } catch (error) {
+                console.warn(`Failed to process file ${file}: ${error.message}`);
+            }
+        }
+
+        const indexData: IndexFile = {
+            version: INDEX_VERSION,
+            embedModel: config.embedModel,
+            dim: embeddingDimension,
+            createdAt: new Date().toISOString(),
+            chunks
+        };
+
+        fs.writeFileSync(INDEX_PATH, JSON.stringify(indexData, null, JSON_INDENT), FILE_ENCODING);
+        console.log(`Indexed ${chunks.length} chunks → ${INDEX_PATH}`);
+    } catch (error) {
+        console.error(MESSAGES.INDEXING_FAILED, error.message);
+        process.exit(1);
     }
-
-    const indexData: IndexFile = {
-        version: 1,
-        embedModel: config.embedModel,
-        dim,
-        createdAt: new Date().toISOString(),
-        chunks
-    };
-
-    fs.writeFileSync(INDEX_PATH, JSON.stringify(indexData, null, 2), "utf-8");
-    console.log(`Indexed ${chunks.length} chunks → ${INDEX_PATH}`);
 }
 
-main().catch((e) => {
-    console.error("Indexing failed:", e);
+main().catch((error) => {
+    console.error(MESSAGES.INDEXING_FAILED, error.message);
     process.exit(1);
 });
